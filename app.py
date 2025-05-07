@@ -1,35 +1,70 @@
 from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
-from models import db, User
+from flask_cors import CORS
+import mysql.connector
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
-app.config['JWT_SECRET_KEY'] = 'your-secret-key'  # change this to a strong secret
+app.config['JWT_SECRET_KEY'] = '7b47afe9e7548d8fa383da03d16691f2b656cf25415a516c80299e2335e6e8bd'
+CORS(app)
 
-db.init_app(app)
+db_config = {
+    'host': 'localhost',
+    'port': 3306,
+    'user': 'root',
+    'password': '',
+    'database': 'medovia'
+}
+
 jwt = JWTManager(app)
 
-with app.app_context():
-    db.create_all()
+def get_db_connection():
+    return mysql.connector.connect(**db_config)
 
 @app.route('/signup', methods=['POST'])
 def signup():
     data = request.get_json()
-    hashed_pw = generate_password_hash(data['password'])
-    new_user = User(username=data['username'], password=hashed_pw)
-    db.session.add(new_user)
-    db.session.commit()
-    return jsonify(message="User created"), 201
+    username = data['username']
+    email = data['email']
+    password = data['password']
+
+    hashed_pw = generate_password_hash(password)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            "INSERT INTO users (username, email, password) VALUES (%s, %s, %s)",
+            (username, email, hashed_pw)
+        )
+        conn.commit()
+        return jsonify(message="User created"), 201
+    except mysql.connector.IntegrityError:
+        return jsonify(message="Username or email already exists"), 409
+    finally:
+        cursor.close()
+        conn.close()
 
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
-    user = User.query.filter_by(username=data['username']).first()
-    if user and check_password_hash(user.password, data['password']):
-        access_token = create_access_token(identity=user.username)
+    email = data['email']
+    password = data['password']
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
+    user = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    if user and check_password_hash(user['password'], password):
+        access_token = create_access_token(identity=email)
         return jsonify(access_token=access_token)
+
     return jsonify(message="Invalid credentials"), 401
 
 @app.route('/dashboard', methods=['GET'])
